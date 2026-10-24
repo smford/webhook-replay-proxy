@@ -1,0 +1,98 @@
+version: 2
+
+project_name: webhook-replay-proxy
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: webhook-replay-proxy
+    main: ./cmd/webhook-replay-proxy
+    binary: webhook-replay-proxy
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE*
+      - README*
+      - config.example.yaml
+      - docs/*
+
+dockers_v2:
+  - id: webhook-replay-proxy
+    images:
+      - "ghcr.io/smford/webhook-replay-proxy"
+    tags:
+      - "latest"
+      - "{{ .Tag }}"
+      - "v{{ .Major }}.{{ .Minor }}"
+      - "v{{ .Major }}"
+    dockerfile: Dockerfile.goreleaser
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
+checksum:
+  name_template: 'checksums.txt'
+
+signs:
+  - id: cosign
+    cmd: cosign
+    artifacts: checksum
+    certificate: '${artifact}.pem'
+    args:
+      - "sign-blob"
+      - "--yes"
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+    output: true
+
+docker_signs:
+  - id: cosign
+    cmd: cosign
+    artifacts: all
+    args:
+      - "sign"
+      - "--yes"
+      - "${artifact}"
+    output: true
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: smford
+    name: webhook-replay-proxy
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## webhook-replay-proxy {{ .Tag }} ({{ .Date }})
+
+    Welcome to the latest release of `webhook-replay-proxy`!

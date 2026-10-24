@@ -1,0 +1,25 @@
+# Binaries
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/webhook-replay-proxy
+
+# Test and coverage artifacts
+coverage.out
+coverage.html
+*.test
+*.prof
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*~

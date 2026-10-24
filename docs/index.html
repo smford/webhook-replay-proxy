@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>webhook-replay-proxy | Production Webhook Capture &amp; Replay Proxy</title>
+  <!-- Google Analytics 4 -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=webhook-replay-proxy"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'webhook-replay-proxy', { send_page_view: false });
+  </script>
+  <script defer src="js/analytics.js"></script>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #0f172a;
+      --card-border: #1e293b;
+      --accent: #38bdf8;
+      --text: #e2e8f0;
+      --text-dim: #94a3b8;
+      --code-bg: #1e293b;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+    }
+    header {
+      padding: 60px 20px 40px;
+      text-align: center;
+      border-bottom: 1px solid var(--card-border);
+      background: radial-gradient(circle at 50% 0%, #1e293b 0%, #090d16 80%);
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 2.8rem;
+      letter-spacing: -0.02em;
+      color: #fff;
+    }
+    p.tagline {
+      font-size: 1.2rem;
+      color: var(--text-dim);
+      max-width: 650px;
+      margin: 0 auto 20px;
+    }
+    .badge-bar {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 25px;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 30px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    h2 {
+      margin-top: 0;
+      font-size: 1.5rem;
+      color: var(--accent);
+    }
+    pre {
+      background: var(--code-bg);
+      padding: 16px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-family: ui-monospace, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.95rem;
+      border: 1px solid #334155;
+    }
+    code {
+      font-family: ui-monospace, Menlo, Monaco, Consolas, monospace;
+    }
+    .install-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #111827;
+      border: 1px solid #374151;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-family: monospace;
+      margin-bottom: 15px;
+    }
+    button.copy-btn {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button.copy-btn:hover {
+      background: var(--primary-hover);
+    }
+    .release-info {
+      display: inline-block;
+      margin-top: 6px;
+      color: var(--accent);
+      font-weight: 500;
+    }
+    footer {
+      text-align: center;
+      padding: 30px;
+      color: var(--text-dim);
+      font-size: 0.9rem;
+      border-top: 1px solid var(--card-border);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>webhook-replay-proxy</h1>
+  <p class="tagline">Production-grade webhook capture, replay, and inspection proxy for edge and cloud environments.</p>
+  <div class="badge-bar">
+    <a href="https://github.com/smford/webhook-replay-proxy/releases/tag/v0.1.0">
+      <img src="https://img.shields.io/github/v/release/smford/webhook-replay-proxy?color=blue&logo=github" alt="Release v0.1.0">
+    </a>
+    <img src="https://github.com/smford/webhook-replay-proxy/actions/workflows/ci.yml/badge.svg" alt="CI">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT">
+  </div>
+  <div class="release-info">
+    Current Release: <span id="release-version">v0.1.0</span> (<span id="release-version-number">0.1.0</span>)
+  </div>
+</header>
+
+<div class="container">
+  <div class="card">
+    <h2>Homebrew Installation</h2>
+    <div class="install-box">
+      <span>brew install smford/homebrew-tap/webhook-replay-proxy</span>
+      <button class="copy-btn" data-copy="brew install smford/homebrew-tap/webhook-replay-proxy" onclick="navigator.clipboard.writeText('brew install smford/homebrew-tap/webhook-replay-proxy')">Copy</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Docker Container</h2>
+    <div class="install-box">
+      <span>docker run -d -p 8080:8080 ghcr.io/smford/webhook-replay-proxy:v0.1.0</span>
+      <button class="copy-btn" data-copy="docker run -d -p 8080:8080 ghcr.io/smford/webhook-replay-proxy:v0.1.0" onclick="navigator.clipboard.writeText('docker run -d -p 8080:8080 ghcr.io/smford/webhook-replay-proxy:v0.1.0')">Copy</button>
+    </div>
+    <p>Or download precompiled standalone binaries from <a href="https://github.com/smford/webhook-replay-proxy/releases/download/v0.1.0/webhook-replay-proxy_0.1.0_darwin_arm64.tar.gz" style="color: var(--accent);">GitHub Releases</a>.</p>
+  </div>
+
+  <div class="card">
+    <h2>Quick Start</h2>
+    <pre><code># Start the proxy daemon
+webhook-replay-proxy -port 8080
+
+# Send a test webhook
+curl -X POST http://localhost:8080/api/v1/webhooks \
+  -H "Content-Type: application/json" \
+  -d '{"event": "payment.succeeded", "amount": 4200}'
+
+# Verify health status
+curl http://localhost:8080/healthz</code></pre>
+  </div>
+</div>
+
+<footer>
+  <p>&copy; 2026 smford. Released under the MIT License.</p>
+</footer>
+
+</body>
+</html>
