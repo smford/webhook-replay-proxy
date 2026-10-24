@@ -4,83 +4,300 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
-	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/smford/webhook-replay-proxy/internal/config"
-	"github.com/smford/webhook-replay-proxy/internal/server"
+	"github.com/smford/webhook-replay-proxy/internal/proxy"
+	"github.com/smford/webhook-replay-proxy/internal/store"
 )
 
 var (
-	version = "dev"
+	version = "0.1.0"
 	commit  = "none"
 	date    = "unknown"
 )
 
+type arrayFlags []string
+
+func (a *arrayFlags) String() string {
+	return strings.Join(*a, ", ")
+}
+
+func (a *arrayFlags) Set(value string) error {
+	*a = append(*a, value)
+	return nil
+}
+
+func printVersion() {
+	fmt.Printf("webhook-replay-proxy %s (commit: %s, date: %s)\n", version, commit, date)
+	fmt.Println("Copyright (c) 2026 smford")
+	fmt.Println("Licensed under the MIT License")
+	fmt.Println("https://github.com/smford/webhook-replay-proxy")
+}
+
+func printUsage() {
+	printVersion()
+	fmt.Println()
+	fmt.Println("Usage:")
+	fmt.Println("  webhook-replay-proxy [command] [flags]")
+	fmt.Println()
+	fmt.Println("Commands:")
+	fmt.Println("  listen             Start webhook capture and forwarding server (default)")
+	fmt.Println("  list               List recorded webhooks from SQLite database")
+	fmt.Println("  replay <event_id>  Replay a captured webhook with mutations and HMAC re-signing")
+	fmt.Println("  version            Show version information")
+	fmt.Println()
+	fmt.Println("Flags for 'listen':")
+	fmt.Println("  --port, -port <int>        Listen port (default: 8080)")
+	fmt.Println("  --forward-to <url>         Forward incoming webhooks to target URL")
+	fmt.Println("  --db <path>                Path to SQLite database (default: ./webhooks.db)")
+	fmt.Println("  --config <path>            Path to YAML configuration file")
+	fmt.Println()
+	fmt.Println("Flags for 'list':")
+	fmt.Println("  --db <path>                Path to SQLite database (default: ./webhooks.db)")
+	fmt.Println("  --limit <int>              Maximum events to list (default: 50)")
+	fmt.Println()
+	fmt.Println("Flags for 'replay':")
+	fmt.Println("  --target <url>             Override destination target URL")
+	fmt.Println("  --provider <name>          Provider signing scheme (stripe, github, slack, shopify, standard, auto)")
+	fmt.Println("  --secret <string>          Webhook HMAC secret to re-sign payload with fresh timestamp")
+	fmt.Println("  --set <key.path=value>     Mutate JSON field (can be specified multiple times)")
+	fmt.Println("  --concurrency <int>        Number of concurrent requests fired simultaneously (default: 1)")
+	fmt.Println("  --db <path>                Path to SQLite database (default: ./webhooks.db)")
+}
+
 func main() {
+	args := os.Args[1:]
+
+	// Check top-level version or help flags
+	for _, arg := range args {
+		if arg == "-v" || arg == "--version" || arg == "-version" || arg == "version" {
+			printVersion()
+			return
+		}
+		if arg == "-h" || arg == "--help" || arg == "help" {
+			printUsage()
+			return
+		}
+	}
+
+	cmd := "listen"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		cmd = args[0]
+		args = args[1:]
+	}
+
+	switch cmd {
+	case "listen":
+		runListen(args)
+	case "list":
+		runList(args)
+	case "replay":
+		runReplay(args)
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
+		printUsage()
+		os.Exit(1)
+	}
+}
+
+func runListen(args []string) {
+	fs := flag.NewFlagSet("listen", flag.ExitOnError)
 	var (
-		configPath string
-		showVer    bool
 		port       int
+		forwardTo  string
+		dbPath     string
+		configPath string
 	)
 
-	flag.StringVar(&configPath, "config", "", "Path to YAML configuration file")
-	flag.BoolVar(&showVer, "version", false, "Print version information and exit")
-	flag.IntVar(&port, "port", 0, "HTTP server port (overrides config)")
-	flag.Parse()
+	fs.IntVar(&port, "port", 8080, "Port to listen on")
+	fs.StringVar(&forwardTo, "forward-to", "", "Forward target URL")
+	fs.StringVar(&dbPath, "db", "./webhooks.db", "SQLite database path")
+	fs.StringVar(&configPath, "config", "", "YAML configuration path")
 
-	if showVer {
-		fmt.Printf("webhook-replay-proxy version %s (commit: %s, built: %s)\n", version, commit, date)
-		os.Exit(0)
+	_ = fs.Parse(args)
+
+	// If config file is provided, load defaults from it
+	if configPath != "" {
+		cfg, err := config.Load(configPath)
+		if err == nil {
+			if port == 8080 && cfg.Server.Port != 0 {
+				port = cfg.Server.Port
+			}
+			if forwardTo == "" && cfg.Upstream.DefaultTargetURL != "" {
+				forwardTo = cfg.Upstream.DefaultTargetURL
+			}
+		}
 	}
 
-	cfg, err := config.Load(configPath)
+	st, err := store.Open(dbPath)
 	if err != nil {
-		log.Fatalf("Error loading config: %v", err)
+		fmt.Fprintf(os.Stderr, "Failed to open SQLite database at %s: %v\n", dbPath, err)
+		os.Exit(1)
 	}
+	defer st.Close()
 
-	if port > 0 {
-		cfg.Server.Port = port
+	addr := fmt.Sprintf("0.0.0.0:%d", port)
+	srv := proxy.NewServer(proxy.ServerConfig{
+		Addr:       addr,
+		ForwardURL: forwardTo,
+		Store:      st,
+		Version:    version,
+	})
+
+	fmt.Printf("webhook-replay-proxy %s starting\n", version)
+	fmt.Printf("• Listening on: http://%s\n", addr)
+	if forwardTo != "" {
+		fmt.Printf("• Forwarding to: %s\n", forwardTo)
+	} else {
+		fmt.Println("• Forwarding: disabled (recording only)")
 	}
+	fmt.Printf("• Storage: SQLite (%s)\n\n", dbPath)
 
-	srvInstance := server.NewServer(cfg, version)
-	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
 
-	httpServer := &http.Server{
-		Addr:              addr,
-		Handler:           srvInstance.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	serverErrors := make(chan error, 1)
 	go func() {
-		log.Printf("Starting webhook-replay-proxy %s on http://%s", version, addr)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			serverErrors <- err
+		if err := srv.Start(); err != nil && err != proxy.ErrServerClosed() {
+			fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+			os.Exit(1)
 		}
 	}()
 
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
+	<-stopChan
+	fmt.Println("\nShutting down webhook-replay-proxy gracefully...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
+}
 
-	select {
-	case err := <-serverErrors:
-		log.Fatalf("Server failed to start: %v", err)
-	case sig := <-shutdown:
-		log.Printf("Shutdown signal %v received, stopping gracefully...", sig)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+func runList(args []string) {
+	fs := flag.NewFlagSet("list", flag.ExitOnError)
+	var (
+		dbPath string
+		limit  int
+	)
+	fs.StringVar(&dbPath, "db", "./webhooks.db", "SQLite database path")
+	fs.IntVar(&limit, "limit", 50, "Limit number of records")
+	_ = fs.Parse(args)
 
-		if err := httpServer.Shutdown(ctx); err != nil {
-			log.Printf("Graceful shutdown failed: %v, forcing exit", err)
-			_ = httpServer.Close()
+	st, err := store.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open SQLite database at %s: %v\n", dbPath, err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	events, err := st.ListEvents(limit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to list events: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(events) == 0 {
+		fmt.Println("No webhooks captured yet.")
+		return
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tTIMESTAMP\tPROVIDER\tMETHOD\tPATH\tSTATUS\tLATENCY")
+	for _, e := range events {
+		statusStr := "-"
+		if e.ForwardStatus > 0 {
+			statusStr = strconv.Itoa(e.ForwardStatus)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%dms\n",
+			e.ID,
+			e.Timestamp.Format("2006-01-02 15:04:05"),
+			e.Provider,
+			e.Method,
+			e.Path,
+			statusStr,
+			e.LatencyMs,
+		)
+	}
+	_ = w.Flush()
+}
+
+func runReplay(args []string) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(os.Stderr, "Error: <event_id> argument is required for replay")
+		fmt.Fprintln(os.Stderr, "Usage: webhook-replay-proxy replay <event_id> [flags]")
+		os.Exit(1)
+	}
+
+	eventID := args[0]
+	args = args[1:]
+
+	fs := flag.NewFlagSet("replay", flag.ExitOnError)
+	var (
+		targetURL   string
+		provider    string
+		secret      string
+		concurrency int
+		dbPath      string
+		mutations   arrayFlags
+	)
+
+	fs.StringVar(&targetURL, "target", "", "Target URL override")
+	fs.StringVar(&provider, "provider", "auto", "Provider signing scheme (stripe, github, slack, shopify, standard, auto)")
+	fs.StringVar(&secret, "secret", "", "Webhook HMAC secret to re-sign payload")
+	fs.IntVar(&concurrency, "concurrency", 1, "Number of concurrent replayed requests")
+	fs.StringVar(&dbPath, "db", "./webhooks.db", "SQLite database path")
+	fs.Var(&mutations, "set", "Mutate JSON field (key.path=value)")
+
+	_ = fs.Parse(args)
+
+	st, err := store.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open SQLite database at %s: %v\n", dbPath, err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	engine := proxy.NewReplayEngine(st)
+	fmt.Printf("Replaying event: %s\n", eventID)
+	if len(mutations) > 0 {
+		fmt.Printf("• Mutations (%d): %s\n", len(mutations), strings.Join(mutations, ", "))
+	}
+	if secret != "" {
+		fmt.Printf("• Re-signing with provider: %s\n", provider)
+	}
+	fmt.Printf("• Concurrency: %d simultaneous request(s)\n\n", concurrency)
+
+	start := time.Now()
+	results, err := engine.Execute(context.Background(), proxy.ReplayOptions{
+		EventID:     eventID,
+		TargetURL:   targetURL,
+		Provider:    provider,
+		Secret:      secret,
+		Mutations:   mutations,
+		Concurrency: concurrency,
+	})
+	totalTime := time.Since(start).Milliseconds()
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Replay failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	successCount := 0
+	for _, res := range results {
+		if res.Error != nil {
+			fmt.Printf("[%d] FAILED: %v (latency: %dms)\n", res.Index+1, res.Error, res.LatencyMs)
+		} else {
+			if res.StatusCode >= 200 && res.StatusCode < 300 {
+				successCount++
+			}
+			fmt.Printf("[%d] HTTP %d | Latency: %dms\n", res.Index+1, res.StatusCode, res.LatencyMs)
 		}
 	}
+
+	fmt.Printf("\nFinished: %d/%d successful in %dms total\n", successCount, concurrency, totalTime)
 }

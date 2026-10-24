@@ -105,7 +105,7 @@ class WebhookReplayProxy < Formula
   end
 
   test do
-    assert_match "webhook-replay-proxy version", shell_output("#{bin}/webhook-replay-proxy --version")
+    assert_match "webhook-replay-proxy", shell_output("#{bin}/webhook-replay-proxy --version")
   end
 end
 EOF
