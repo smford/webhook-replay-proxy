@@ -76,7 +76,30 @@ webhook-replay-proxy replay evt_179285514721 \
 
 ![Replay Mutation Diff](docs/assets/replay-mutation-diff.svg)
 
-### 4. Export Executable `curl` Command
+### 4. Chaos Engineering, Time-Travel & Assertions
+
+```bash
+# Chaos: deliberately corrupt HMAC signature to ensure endpoint rejects with 401
+webhook-replay-proxy replay evt_179285514721 --secret whsec_dev_key --corrupt-sig --assert-status 401
+
+# Time-travel: test 5-minute freshness tolerance by setting timestamp 10m in the past
+webhook-replay-proxy replay evt_179285514721 --secret whsec_dev_key --time-offset -10m
+
+# CI Idempotency Assertion: verify exactly 1 succeeds and 9 get 409 conflict under storm
+webhook-replay-proxy replay evt_179285514721 --concurrency 10 --assert-status "200:1,409:9" --max-latency 200ms
+```
+
+### 5. Export Fixtures & Standalone Replay
+
+```bash
+# Export to version-controlled JSON fixture
+webhook-replay-proxy export evt_179285514721 -o fixtures/payment_intent.json
+
+# Replay directly in CI without needing SQLite database
+webhook-replay-proxy replay --file fixtures/payment_intent.json --target http://localhost:3000/webhook
+```
+
+### 6. Export Executable `curl` Command
 
 ```bash
 webhook-replay-proxy curl evt_179285514721 \
@@ -91,6 +114,13 @@ curl -X POST "http://localhost:3000/webhooks" \
   -H "Stripe-Signature: t=1792855900,v1=4a5b6c7d8e9f..." \
   --data '{"data":{"object":{"amount_total":999999,"currency":"usd"}},"type":"checkout.session.completed"}'
 ```
+
+### 7. Interactive Live Dashboard
+
+```bash
+webhook-replay-proxy listen --port 8080 --forward-to http://localhost:3000/webhook --ui
+```
+Open `http://localhost:8080/_dashboard` in your browser for a real-time event inspector, one-click replayer, and field editor.
 
 ---
 
@@ -130,7 +160,7 @@ Download signed standalone binaries for Darwin and Linux (`amd64`, `arm64`) from
 ## CLI Usage
 
 ```text
-webhook-replay-proxy 0.1.0 (commit: dev, date: unknown)
+webhook-replay-proxy 0.2.0 (commit: dev, date: unknown)
 Copyright (c) 2026 smford
 Licensed under the MIT License
 https://github.com/smford/webhook-replay-proxy
@@ -142,6 +172,7 @@ Commands:
   listen             Start webhook capture and forwarding server (default)
   list               List recorded webhooks from SQLite database
   inspect <event_id> Inspect recorded webhook payload, headers, and replay history
+  export <event_id>  Export recorded webhook to a standalone JSON fixture file
   replay <event_id>  Replay a captured webhook with mutations and HMAC re-signing
   curl <event_id>    Generate ready-to-run curl command with fresh HMAC signature
   version            Show version information
@@ -151,6 +182,7 @@ Flags for 'listen':
   --forward-to <url>         Forward incoming webhooks to target URL
   --db <path>                Path to SQLite database (default: ./webhooks.db)
   --config <path>            Path to YAML configuration file
+  --ui                       Enable embedded web dashboard at /_dashboard
 
 Flags for 'list':
   --db <path>                Path to SQLite database (default: ./webhooks.db)
@@ -160,7 +192,12 @@ Flags for 'inspect':
   --db <path>                Path to SQLite database (default: ./webhooks.db)
   --raw                      Print raw unformatted payload body
 
+Flags for 'export':
+  --output, -o <path>        Output file path (default: stdout)
+  --db <path>                Path to SQLite database (default: ./webhooks.db)
+
 Flags for 'replay':
+  --file <path>              Replay directly from a fixture JSON file without SQLite
   --target <url>             Override destination target URL
   --provider <name>          Provider signing scheme (stripe, github, slack, shopify, standard, auto)
   --secret <string>          Webhook HMAC secret to re-sign payload with fresh timestamp
@@ -168,13 +205,26 @@ Flags for 'replay':
   --concurrency <int>        Number of concurrent requests fired simultaneously (default: 1)
   --delay <duration>         Delay between spaced requests (e.g. 100ms, 1s)
   --diff                     Display visual diff of mutated JSON payload before replaying
+  --corrupt-sig              Deliberately corrupt HMAC signature to verify 401 rejection
+  --corrupt-json             Deliberately malform payload JSON to test parser error handling
+  --drop-header <name>       Strip specified header before dispatching (can be repeated)
+  --time-offset <duration>   Offset signing timestamp from current time (e.g. -10m, +1h)
+  --fixed-timestamp <unix>   Use an exact fixed unix epoch timestamp for signing
+  --assert-status <pattern>  Assert response status distribution (e.g. '200:1,409:9' or '200')
+  --max-latency <duration>   Fail assertion if any request latency exceeds threshold
   --db <path>                Path to SQLite database (default: ./webhooks.db)
 
 Flags for 'curl':
+  --file <path>              Generate curl directly from a fixture JSON file
   --target <url>             Override destination target URL
   --provider <name>          Provider signing scheme (stripe, github, slack, shopify, standard, auto)
   --secret <string>          Webhook HMAC secret to re-sign payload with fresh timestamp
   --set <key.path=value>     Mutate JSON field (can be specified multiple times)
+  --corrupt-sig              Deliberately corrupt HMAC signature
+  --corrupt-json             Deliberately malform payload JSON
+  --drop-header <name>       Strip specified header from generated curl command
+  --time-offset <duration>   Offset signing timestamp from current time
+  --fixed-timestamp <unix>   Use an exact fixed unix epoch timestamp for signing
   --db <path>                Path to SQLite database (default: ./webhooks.db)
 ```
 

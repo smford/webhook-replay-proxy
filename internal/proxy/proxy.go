@@ -23,6 +23,7 @@ type ServerConfig struct {
 	ForwardURL string
 	Store      *store.Store
 	Version    string
+	EnableUI   bool
 }
 
 // Server handles listening and forwarding incoming webhooks.
@@ -45,6 +46,9 @@ func NewServer(cfg ServerConfig) *Server {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/version", s.handleVersion)
 	mux.HandleFunc("/", s.handleWebhook)
+
+	// Register Web UI and API routes
+	s.registerUIRoutes(mux)
 
 	s.httpServer = &http.Server{
 		Addr:              cfg.Addr,
@@ -86,7 +90,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "") {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"service":"webhook-replay-proxy","version":%q,"status":"running"}`+"\n", s.cfg.Version)
+		_, _ = fmt.Fprintf(w, `{"service":"webhook-replay-proxy","version":%q,"status":"running","dashboard":"/_dashboard"}`+"\n", s.cfg.Version)
 		return
 	}
 
@@ -168,7 +172,6 @@ func resolveForwardURL(baseStr, path, query string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Append path and query
 	resolved := baseURL.ResolveReference(&url.URL{
 		Path:     path,
 		RawQuery: query,
@@ -178,14 +181,22 @@ func resolveForwardURL(baseStr, path, query string) (string, error) {
 
 // ReplayOptions configures a webhook replay operation.
 type ReplayOptions struct {
-	EventID     string
-	TargetURL   string
-	Provider    string
-	Secret      string
-	Mutations   []string
-	Concurrency int
-	Delay       time.Duration
-	ShowDiff    bool
+	EventID        string
+	FixturePath    string
+	TargetURL      string
+	Provider       string
+	Secret         string
+	Mutations      []string
+	Concurrency    int
+	Delay          time.Duration
+	ShowDiff       bool
+	CorruptSig     bool
+	CorruptJSON    bool
+	DropHeaders    []string
+	TimeOffset     time.Duration
+	FixedTimestamp int64
+	AssertStatus   string
+	MaxLatency     time.Duration
 }
 
 // ReplayResult captures the result of a single replayed request.
@@ -215,11 +226,29 @@ func NewReplayEngine(s *store.Store) *ReplayEngine {
 
 // PrepareReplay builds the mutated body, signature headers, and resolved target URL without firing.
 func (re *ReplayEngine) PrepareReplay(opts ReplayOptions) ([]byte, http.Header, string, error) {
-	event, err := re.store.GetEvent(opts.EventID)
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("retrieving event %s: %w", opts.EventID, err)
+	var event *store.Event
+	var err error
+
+	if opts.FixturePath != "" {
+		event, err = LoadFixture(opts.FixturePath)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("loading fixture %s: %w", opts.FixturePath, err)
+		}
+	} else {
+		if re.store == nil {
+			return nil, nil, "", fmt.Errorf("store is uninitialized (or provide --file)")
+		}
+		event, err = re.store.GetEvent(opts.EventID)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("retrieving event %s: %w", opts.EventID, err)
+		}
 	}
 
+	return re.PrepareReplayEvent(event, opts)
+}
+
+// PrepareReplayEvent prepares body and headers directly from a store.Event.
+func (re *ReplayEngine) PrepareReplayEvent(event *store.Event, opts ReplayOptions) ([]byte, http.Header, string, error) {
 	targetURL := opts.TargetURL
 	if targetURL == "" {
 		targetURL = event.TargetURL
@@ -237,6 +266,15 @@ func (re *ReplayEngine) PrepareReplay(opts ReplayOptions) ([]byte, http.Header, 
 		body = mutated
 	}
 
+	// Negative testing: Corrupt JSON syntax if requested
+	if opts.CorruptJSON {
+		if len(body) > 0 && body[len(body)-1] == '}' {
+			body = body[:len(body)-1]
+		} else {
+			body = append(body, []byte(`,"corrupted_syntax":[`)...)
+		}
+	}
+
 	provider := strings.ToLower(opts.Provider)
 	if provider == "" || provider == signer.ProviderAuto {
 		provider = event.Provider
@@ -252,9 +290,17 @@ func (re *ReplayEngine) PrepareReplay(opts ReplayOptions) ([]byte, http.Header, 
 		}
 	}
 
+	// Compute signing timestamp with offset or fixed timestamp
+	signingTime := time.Now().UTC()
+	if opts.FixedTimestamp > 0 {
+		signingTime = time.Unix(opts.FixedTimestamp, 0).UTC()
+	} else if opts.TimeOffset != 0 {
+		signingTime = signingTime.Add(opts.TimeOffset)
+	}
+
 	if opts.Secret != "" {
 		sig := signer.New(provider, opts.Secret)
-		sigHeaders, err := sig.Sign(body, time.Now().UTC())
+		sigHeaders, err := sig.Sign(body, signingTime)
 		if err != nil {
 			return nil, nil, "", fmt.Errorf("generating signatures: %w", err)
 		}
@@ -264,6 +310,16 @@ func (re *ReplayEngine) PrepareReplay(opts ReplayOptions) ([]byte, http.Header, 
 				headers.Set(k, v)
 			}
 		}
+	}
+
+	// Negative testing: Corrupt signature if requested
+	if opts.CorruptSig {
+		corruptSignature(headers)
+	}
+
+	// Negative testing: Drop specified headers if requested
+	for _, drop := range opts.DropHeaders {
+		headers.Del(drop)
 	}
 
 	return body, headers, targetURL, nil
@@ -289,65 +345,58 @@ func (re *ReplayEngine) GenerateCurl(opts ReplayOptions) (string, error) {
 
 // Execute performs the replay according to ReplayOptions.
 func (re *ReplayEngine) Execute(ctx context.Context, opts ReplayOptions) ([]ReplayResult, error) {
-	event, err := re.store.GetEvent(opts.EventID)
-	if err != nil {
-		return nil, fmt.Errorf("retrieving event %s: %w", opts.EventID, err)
-	}
+	var event *store.Event
+	var err error
 
-	targetURL := opts.TargetURL
-	if targetURL == "" {
-		targetURL = event.TargetURL
-	}
-	if targetURL == "" {
-		return nil, fmt.Errorf("target URL is required (event has no recorded target URL)")
-	}
-
-	// 1. Mutate payload if requested
-	body := event.Body
-	if len(opts.Mutations) > 0 {
-		mutated, err := mutator.MutateJSON(body, opts.Mutations)
+	if opts.FixturePath != "" {
+		event, err = LoadFixture(opts.FixturePath)
 		if err != nil {
-			return nil, fmt.Errorf("mutating payload: %w", err)
+			return nil, fmt.Errorf("loading fixture %s: %w", opts.FixturePath, err)
 		}
-		if opts.ShowDiff {
+	} else {
+		if re.store == nil {
+			return nil, fmt.Errorf("store is uninitialized (or provide --file)")
+		}
+		event, err = re.store.GetEvent(opts.EventID)
+		if err != nil {
+			return nil, fmt.Errorf("retrieving event %s: %w", opts.EventID, err)
+		}
+	}
+
+	if opts.ShowDiff && len(opts.Mutations) > 0 {
+		mutated, err := mutator.MutateJSON(event.Body, opts.Mutations)
+		if err == nil {
 			fmt.Println("--- Payload Diff ---")
 			fmt.Print(mutator.DiffJSON(event.Body, mutated))
 			fmt.Println("--------------------")
 		}
-		body = mutated
 	}
 
-	// 2. Determine provider and re-sign
-	provider := strings.ToLower(opts.Provider)
-	if provider == "" || provider == signer.ProviderAuto {
-		provider = event.Provider
-		if provider == "" || provider == signer.ProviderNone {
-			provider = signer.DetectProvider(event.Headers)
-		}
+	results, err := re.ExecuteEvent(ctx, event, opts)
+	if err != nil {
+		return results, err
 	}
 
-	// Build headers
-	headers := make(http.Header)
-	for k, vv := range event.Headers {
-		for _, v := range vv {
-			headers.Add(k, v)
+	// Evaluate assertions if requested
+	if opts.AssertStatus != "" || opts.MaxLatency > 0 {
+		if assertErr := AssertReplay(results, opts.AssertStatus, opts.MaxLatency); assertErr != nil {
+			return results, assertErr
 		}
 	}
 
-	// Re-sign if secret is provided or provider is active
-	now := time.Now().UTC()
-	if opts.Secret != "" {
-		sig := signer.New(provider, opts.Secret)
-		sigHeaders, err := sig.Sign(body, now)
-		if err != nil {
-			return nil, fmt.Errorf("generating signatures: %w", err)
-		}
-		for k, vv := range sigHeaders {
-			headers.Del(k)
-			for _, v := range vv {
-				headers.Set(k, v)
-			}
-		}
+	return results, nil
+}
+
+// ExecuteEvent fires requests for the given event and records results.
+func (re *ReplayEngine) ExecuteEvent(ctx context.Context, event *store.Event, opts ReplayOptions) ([]ReplayResult, error) {
+	body, headers, targetURL, err := re.PrepareReplayEvent(event, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	method := event.Method
+	if method == "" {
+		method = http.MethodPost
 	}
 
 	concurrency := opts.Concurrency
@@ -367,7 +416,7 @@ func (re *ReplayEngine) Execute(ctx context.Context, opts ReplayOptions) ([]Repl
 				case <-time.After(opts.Delay):
 				}
 			}
-			req, err := http.NewRequestWithContext(ctx, event.Method, targetURL, bytes.NewReader(body))
+			req, err := http.NewRequestWithContext(ctx, method, targetURL, bytes.NewReader(body))
 			if err != nil {
 				results[i] = ReplayResult{Index: i, Error: err}
 				continue
@@ -404,7 +453,7 @@ func (re *ReplayEngine) Execute(ctx context.Context, opts ReplayOptions) ([]Repl
 			go func(idx int) {
 				defer wg.Done()
 
-				req, err := http.NewRequestWithContext(ctx, event.Method, targetURL, bytes.NewReader(body))
+				req, err := http.NewRequestWithContext(ctx, method, targetURL, bytes.NewReader(body))
 				if err != nil {
 					results[idx] = ReplayResult{Index: idx, Error: err}
 					return
@@ -450,23 +499,60 @@ func (re *ReplayEngine) Execute(ctx context.Context, opts ReplayOptions) ([]Repl
 		wg.Wait()
 	}
 
-	// Record replay in store
-	for _, res := range results {
-		errStr := ""
-		if res.Error != nil {
-			errStr = res.Error.Error()
+	// Record replay in store if store is present
+	if re.store != nil && event.ID != "" {
+		for _, res := range results {
+			errStr := ""
+			if res.Error != nil {
+				errStr = res.Error.Error()
+			}
+			_ = re.store.RecordReplay(&store.ReplayRecord{
+				ID:        fmt.Sprintf("rep_%d_%d", time.Now().UnixNano(), res.Index),
+				EventID:   event.ID,
+				Timestamp: time.Now().UTC(),
+				TargetURL: targetURL,
+				Status:    res.StatusCode,
+				LatencyMs: res.LatencyMs,
+				Success:   res.StatusCode >= 200 && res.StatusCode < 300,
+				Error:     errStr,
+			})
 		}
-		_ = re.store.RecordReplay(&store.ReplayRecord{
-			ID:        fmt.Sprintf("rep_%d_%d", time.Now().UnixNano(), res.Index),
-			EventID:   opts.EventID,
-			Timestamp: time.Now().UTC(),
-			TargetURL: targetURL,
-			Status:    res.StatusCode,
-			LatencyMs: res.LatencyMs,
-			Success:   res.StatusCode >= 200 && res.StatusCode < 300,
-			Error:     errStr,
-		})
 	}
 
 	return results, nil
+}
+
+func corruptSignature(headers http.Header) {
+	mutated := false
+	for k := range headers {
+		lower := strings.ToLower(k)
+		switch lower {
+		case "stripe-signature":
+			val := headers.Get(k)
+			if idx := strings.Index(val, "v1="); idx != -1 {
+				headers.Set(k, val[:idx+3]+"deadbeef00000000000000000000000000000000000000000000000000000000")
+			} else {
+				headers.Set(k, "t=0,v1=deadbeef00000000000000000000000000000000000000000000000000000000")
+			}
+			mutated = true
+		case "x-hub-signature-256":
+			headers.Set(k, "sha256=deadbeef00000000000000000000000000000000000000000000000000000000")
+			mutated = true
+		case "x-hub-signature":
+			headers.Set(k, "sha1=deadbeef00000000000000000000000000000000")
+			mutated = true
+		case "x-slack-signature":
+			headers.Set(k, "v0=deadbeef00000000000000000000000000000000000000000000000000000000")
+			mutated = true
+		case "x-shopify-hmac-sha256":
+			headers.Set(k, "deadbeef00000000000000000000000000000000000=")
+			mutated = true
+		case "svix-signature", "webhook-signature":
+			headers.Set(k, "v1,deadbeef00000000000000000000000000000000000000000000000000000000")
+			mutated = true
+		}
+	}
+	if !mutated {
+		headers.Set("X-Webhook-Signature", "corrupted_signature_deadbeef")
+	}
 }

@@ -119,3 +119,116 @@ curl -X POST "http://localhost:3000/webhooks" \
 ```
 
 You can pipe this command or paste it straight into Postman, Insomnia, or CI runners.
+
+---
+
+## Example 5: Chaos Engineering & Security Validation
+
+### The Scenario
+You need to verify that your application's security middleware properly rejects unauthorized or tampered webhook deliveries with HTTP `401 Unauthorized` or `400 Bad Request`.
+
+1. **Verify HMAC Signature Tampering Rejection**:
+   ```bash
+   webhook-replay-proxy replay evt_179285514721 \
+     --secret whsec_dev_local_secret \
+     --corrupt-sig \
+     --assert-status 401
+   ```
+   *The proxy deliberately flips bytes in the computed HMAC signature. If your application returns anything other than 401, the command exits with code 1!*
+
+2. **Verify Malformed JSON Body Handling**:
+   ```bash
+   webhook-replay-proxy replay evt_179285514721 \
+     --corrupt-json \
+     --assert-status 400
+   ```
+
+3. **Verify Missing Header Defense**:
+   ```bash
+   webhook-replay-proxy replay evt_179285514721 \
+     --drop-header Stripe-Signature \
+     --assert-status 401
+   ```
+
+---
+
+## Example 6: Time-Travel & Timestamp Manipulation
+
+### The Scenario
+Stripe and Slack enforce a strict 5-minute freshness window on webhook signatures to prevent replay attacks. You want to test if your receiver correctly rejects expired webhooks.
+
+```bash
+# Re-sign webhook with timestamp 10 minutes in the past
+webhook-replay-proxy replay evt_179285514721 \
+  --secret whsec_dev_local_secret \
+  --time-offset -10m \
+  --assert-status 401
+```
+
+Or freeze to an exact unix epoch for reproducible regression testing:
+```bash
+webhook-replay-proxy replay evt_179285514721 \
+  --secret whsec_dev_local_secret \
+  --fixed-timestamp 1792855000
+```
+
+---
+
+## Example 7: Automated CI Pipeline & Idempotency Assertions
+
+### The Scenario
+You want to include a webhook race condition test in your GitHub Actions CI pipeline, asserting that under 10 concurrent requests, exactly 1 succeeds (200) and 9 return an idempotency conflict (409), and all finish under 150ms:
+
+```bash
+webhook-replay-proxy replay evt_179285514721 \
+  --concurrency 10 \
+  --assert-status "200:1,409:9" \
+  --max-latency 150ms
+```
+
+If your application fails to handle the storm or suffers a race condition, the proxy outputs an assertion error and exits with code `1`, causing CI to fail:
+```text
+Replay failed assertion or error: status count assertion failed for HTTP 200: expected 1, got 2 (actual distribution: 200:2, 409:8)
+```
+
+---
+
+## Example 8: Portable Fixture Export & Standalone Replay
+
+### The Scenario
+You want to commit recorded webhooks directly into your git repository alongside your test suite so anyone on your team can replay them without sharing the local SQLite database.
+
+1. **Export the recorded event to a JSON fixture**:
+   ```bash
+   webhook-replay-proxy export evt_179285514721 -o test/fixtures/stripe_checkout.json
+   ```
+
+2. **Replay directly from the fixture file**:
+   ```bash
+   webhook-replay-proxy replay --file test/fixtures/stripe_checkout.json \
+     --target http://localhost:3000/api/webhooks \
+     --secret whsec_dev_secret \
+     --set data.object.amount=3500
+   ```
+
+---
+
+## Example 9: Embedded Web UI Dashboard
+
+### The Scenario
+You prefer an interactive visual interface to inspect live webhooks, modify payloads, and test replaying.
+
+```bash
+webhook-replay-proxy listen --port 8080 --forward-to http://localhost:3000/webhook --ui
+```
+
+Open your browser to:
+```text
+http://localhost:8080/_dashboard
+```
+
+You get:
+- Real-time list of captured webhooks
+- Formatted JSON payload viewer & header inspector
+- Point-and-click field mutation & one-click re-send
+- Instant "Copy curl" button
