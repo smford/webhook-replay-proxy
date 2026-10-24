@@ -177,6 +177,8 @@ type ReplayOptions struct {
 	Secret      string
 	Mutations   []string
 	Concurrency int
+	Delay       time.Duration
+	ShowDiff    bool
 }
 
 // ReplayResult captures the result of a single replayed request.
@@ -204,6 +206,80 @@ func NewReplayEngine(s *store.Store) *ReplayEngine {
 	}
 }
 
+// PrepareReplay builds the mutated body, signature headers, and resolved target URL without firing.
+func (re *ReplayEngine) PrepareReplay(opts ReplayOptions) ([]byte, http.Header, string, error) {
+	event, err := re.store.GetEvent(opts.EventID)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("retrieving event %s: %w", opts.EventID, err)
+	}
+
+	targetURL := opts.TargetURL
+	if targetURL == "" {
+		targetURL = event.TargetURL
+	}
+	if targetURL == "" {
+		return nil, nil, "", fmt.Errorf("target URL is required (event has no recorded target URL)")
+	}
+
+	body := event.Body
+	if len(opts.Mutations) > 0 {
+		mutated, err := mutator.MutateJSON(body, opts.Mutations)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("mutating payload: %w", err)
+		}
+		body = mutated
+	}
+
+	provider := strings.ToLower(opts.Provider)
+	if provider == "" || provider == signer.ProviderAuto {
+		provider = event.Provider
+		if provider == "" || provider == signer.ProviderNone {
+			provider = signer.DetectProvider(event.Headers)
+		}
+	}
+
+	headers := make(http.Header)
+	for k, vv := range event.Headers {
+		for _, v := range vv {
+			headers.Add(k, v)
+		}
+	}
+
+	if opts.Secret != "" {
+		sig := signer.New(provider, opts.Secret)
+		sigHeaders, err := sig.Sign(body, time.Now().UTC())
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("generating signatures: %w", err)
+		}
+		for k, vv := range sigHeaders {
+			headers.Del(k)
+			for _, v := range vv {
+				headers.Set(k, v)
+			}
+		}
+	}
+
+	return body, headers, targetURL, nil
+}
+
+// GenerateCurl formats an executable curl command string for the replay.
+func (re *ReplayEngine) GenerateCurl(opts ReplayOptions) (string, error) {
+	body, headers, targetURL, err := re.PrepareReplay(opts)
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("curl -X POST %q \\\n", targetURL))
+	for k, vv := range headers {
+		for _, v := range vv {
+			sb.WriteString(fmt.Sprintf("  -H %q \\\n", fmt.Sprintf("%s: %s", k, v)))
+		}
+	}
+	sb.WriteString(fmt.Sprintf("  --data %q", string(body)))
+	return sb.String(), nil
+}
+
 // Execute performs the replay according to ReplayOptions.
 func (re *ReplayEngine) Execute(ctx context.Context, opts ReplayOptions) ([]ReplayResult, error) {
 	event, err := re.store.GetEvent(opts.EventID)
@@ -225,6 +301,11 @@ func (re *ReplayEngine) Execute(ctx context.Context, opts ReplayOptions) ([]Repl
 		mutated, err := mutator.MutateJSON(body, opts.Mutations)
 		if err != nil {
 			return nil, fmt.Errorf("mutating payload: %w", err)
+		}
+		if opts.ShowDiff {
+			fmt.Println("--- Payload Diff ---")
+			fmt.Print(mutator.DiffJSON(event.Body, mutated))
+			fmt.Println("--------------------")
 		}
 		body = mutated
 	}
@@ -269,60 +350,98 @@ func (re *ReplayEngine) Execute(ctx context.Context, opts ReplayOptions) ([]Repl
 
 	results := make([]ReplayResult, concurrency)
 
-	// Concurrency synchronization barrier: all goroutines wait on startGate
-	var wg sync.WaitGroup
-	startGate := make(chan struct{})
-	var counter int64
-
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-
+	// If Delay > 0, run sequentially with pacing
+	if opts.Delay > 0 && concurrency > 1 {
+		for i := 0; i < concurrency; i++ {
+			if i > 0 {
+				select {
+				case <-ctx.Done():
+					return results, ctx.Err()
+				case <-time.After(opts.Delay):
+				}
+			}
 			req, err := http.NewRequestWithContext(ctx, event.Method, targetURL, bytes.NewReader(body))
 			if err != nil {
-				results[idx] = ReplayResult{Index: idx, Error: err}
-				return
+				results[i] = ReplayResult{Index: i, Error: err}
+				continue
 			}
-
 			for k, vv := range headers {
 				for _, v := range vv {
 					req.Header.Add(k, v)
 				}
 			}
-
-			// Wait at barrier until all goroutines are initialized
-			<-startGate
-
 			start := time.Now()
 			resp, err := re.client.Do(req)
 			latency := time.Since(start).Milliseconds()
-
 			if err != nil {
-				results[idx] = ReplayResult{
-					Index:     idx,
-					LatencyMs: latency,
-					Error:     err,
-				}
-				atomic.AddInt64(&counter, 1)
-				return
+				results[i] = ReplayResult{Index: i, LatencyMs: latency, Error: err}
+				continue
 			}
-			defer resp.Body.Close()
-
 			respBody, _ := io.ReadAll(resp.Body)
-			results[idx] = ReplayResult{
-				Index:        idx,
+			resp.Body.Close()
+			results[i] = ReplayResult{
+				Index:        i,
 				StatusCode:   resp.StatusCode,
 				ResponseBody: string(respBody),
 				LatencyMs:    latency,
 			}
-			atomic.AddInt64(&counter, 1)
-		}(i)
-	}
+		}
+	} else {
+		// Concurrency synchronization barrier: all goroutines wait on startGate
+		var wg sync.WaitGroup
+		startGate := make(chan struct{})
+		var counter int64
 
-	// Release all goroutines simultaneously
-	close(startGate)
-	wg.Wait()
+		for i := 0; i < concurrency; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+
+				req, err := http.NewRequestWithContext(ctx, event.Method, targetURL, bytes.NewReader(body))
+				if err != nil {
+					results[idx] = ReplayResult{Index: idx, Error: err}
+					return
+				}
+
+				for k, vv := range headers {
+					for _, v := range vv {
+						req.Header.Add(k, v)
+					}
+				}
+
+				// Wait at barrier until all goroutines are initialized
+				<-startGate
+
+				start := time.Now()
+				resp, err := re.client.Do(req)
+				latency := time.Since(start).Milliseconds()
+
+				if err != nil {
+					results[idx] = ReplayResult{
+						Index:     idx,
+						LatencyMs: latency,
+						Error:     err,
+					}
+					atomic.AddInt64(&counter, 1)
+					return
+				}
+				defer resp.Body.Close()
+
+				respBody, _ := io.ReadAll(resp.Body)
+				results[idx] = ReplayResult{
+					Index:        idx,
+					StatusCode:   resp.StatusCode,
+					ResponseBody: string(respBody),
+					LatencyMs:    latency,
+				}
+				atomic.AddInt64(&counter, 1)
+			}(i)
+		}
+
+		// Release all goroutines simultaneously
+		close(startGate)
+		wg.Wait()
+	}
 
 	// Record replay in store
 	for _, res := range results {

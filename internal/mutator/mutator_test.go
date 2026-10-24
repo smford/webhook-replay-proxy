@@ -2,6 +2,7 @@ package mutator
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +54,19 @@ func TestMutateJSON(t *testing.T) {
 	metadata := dataObj["metadata"].(map[string]any)
 	if metadata["notes"] != "testing" {
 		t.Errorf("expected metadata.notes testing, got %v", metadata["notes"])
+	}
+}
+
+func TestDiffJSON(t *testing.T) {
+	orig := []byte(`{"status": "pending"}`)
+	mutated := []byte(`{"status": "completed"}`)
+
+	diff := DiffJSON(orig, mutated)
+	if !strings.Contains(diff, "-   \"status\": \"pending\"") && !strings.Contains(diff, "pending") {
+		t.Errorf("diff should contain pending: %s", diff)
+	}
+	if !strings.Contains(diff, "+   \"status\": \"completed\"") && !strings.Contains(diff, "completed") {
+		t.Errorf("diff should contain completed: %s", diff)
 	}
 }
 

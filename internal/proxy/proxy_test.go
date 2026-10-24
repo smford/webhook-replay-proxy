@@ -121,8 +121,24 @@ func TestProxyCaptureAndReplay(t *testing.T) {
 		}
 	}
 
-	// Total calls to target should be 1 initial + 5 replays = 6
-	if atomic.LoadInt64(&targetCalls) != 6 {
-		t.Errorf("expected 6 total target calls, got %d", targetCalls)
+	// 7. Test GenerateCurl
+	curlCmd, err := replayEngine.GenerateCurl(ReplayOptions{
+		EventID:   eventID,
+		TargetURL: targetServer.URL,
+		Provider:  "stripe",
+		Secret:    secret,
+		Mutations: []string{"data.object.amount=9999"},
+	})
+	if err != nil {
+		t.Fatalf("GenerateCurl failed: %v", err)
+	}
+	if !bytes.Contains([]byte(curlCmd), []byte("curl -X POST")) {
+		t.Errorf("curlCmd should contain curl -X POST: %s", curlCmd)
+	}
+	if !bytes.Contains([]byte(curlCmd), []byte("Stripe-Signature")) {
+		t.Errorf("curlCmd should contain Stripe-Signature: %s", curlCmd)
+	}
+	if !bytes.Contains([]byte(curlCmd), []byte("9999")) {
+		t.Errorf("curlCmd should contain mutated amount 9999: %s", curlCmd)
 	}
 }

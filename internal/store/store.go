@@ -217,6 +217,39 @@ func (s *Store) ListEvents(limit int) ([]Event, error) {
 	return events, nil
 }
 
+// GetReplaysForEvent retrieves all replays executed for a given event ID.
+func (s *Store) GetReplaysForEvent(eventID string) ([]ReplayRecord, error) {
+	query := `
+	SELECT id, event_id, timestamp, target_url, status, latency_ms, success, error
+	FROM replays WHERE event_id = ? ORDER BY timestamp DESC
+	`
+	rows, err := s.db.Query(query, eventID)
+	if err != nil {
+		return nil, fmt.Errorf("querying replays: %w", err)
+	}
+	defer rows.Close()
+
+	var replays []ReplayRecord
+	for rows.Next() {
+		var (
+			r       ReplayRecord
+			tsStr   string
+			success int
+			errStr  sql.NullString
+		)
+		if err := rows.Scan(&r.ID, &r.EventID, &tsStr, &r.TargetURL, &r.Status, &r.LatencyMs, &success, &errStr); err != nil {
+			return nil, fmt.Errorf("scanning replay row: %w", err)
+		}
+		r.Timestamp, _ = time.Parse(time.RFC3339Nano, tsStr)
+		r.Success = success == 1
+		if errStr.Valid {
+			r.Error = errStr.String
+		}
+		replays = append(replays, r)
+	}
+	return replays, nil
+}
+
 // RecordReplay stores an entry in the replays history table.
 func (s *Store) RecordReplay(r *ReplayRecord) error {
 	query := `

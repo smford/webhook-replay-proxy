@@ -1,6 +1,7 @@
 package mutator
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -38,6 +39,52 @@ func MutateJSON(raw []byte, mutations []string) ([]byte, error) {
 	}
 
 	return json.Marshal(rootMap)
+}
+
+// DiffJSON generates a line-by-line readable diff between original and mutated JSON.
+func DiffJSON(original, mutated []byte) string {
+	var origBuf, mutBuf bytes.Buffer
+	if err := json.Indent(&origBuf, original, "", "  "); err != nil {
+		origBuf.Write(original)
+	}
+	if err := json.Indent(&mutBuf, mutated, "", "  "); err != nil {
+		mutBuf.Write(mutated)
+	}
+
+	origLines := strings.Split(origBuf.String(), "\n")
+	mutLines := strings.Split(mutBuf.String(), "\n")
+
+	var diff strings.Builder
+	diff.WriteString("--- original\n+++ mutated\n")
+
+	maxLen := len(origLines)
+	if len(mutLines) > maxLen {
+		maxLen = len(mutLines)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var o, m string
+		hasO, hasM := i < len(origLines), i < len(mutLines)
+		if hasO {
+			o = origLines[i]
+		}
+		if hasM {
+			m = mutLines[i]
+		}
+
+		if hasO && hasM && o == m {
+			diff.WriteString("  " + o + "\n")
+		} else {
+			if hasO {
+				diff.WriteString("- " + o + "\n")
+			}
+			if hasM {
+				diff.WriteString("+ " + m + "\n")
+			}
+		}
+	}
+
+	return diff.String()
 }
 
 func parseValue(v string) any {
@@ -90,7 +137,6 @@ func setPath(current map[string]any, path string, val any) error {
 
 		nextMap, ok := next.(map[string]any)
 		if !ok {
-			// Replace non-map with new map
 			newMap := make(map[string]any)
 			curr[k] = newMap
 			curr = newMap

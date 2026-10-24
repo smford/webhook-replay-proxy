@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -50,7 +52,9 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  listen             Start webhook capture and forwarding server (default)")
 	fmt.Println("  list               List recorded webhooks from SQLite database")
+	fmt.Println("  inspect <event_id> Inspect recorded webhook payload, headers, and replay history")
 	fmt.Println("  replay <event_id>  Replay a captured webhook with mutations and HMAC re-signing")
+	fmt.Println("  curl <event_id>    Generate ready-to-run curl command with fresh HMAC signature")
 	fmt.Println("  version            Show version information")
 	fmt.Println()
 	fmt.Println("Flags for 'listen':")
@@ -63,12 +67,25 @@ func printUsage() {
 	fmt.Println("  --db <path>                Path to SQLite database (default: ./webhooks.db)")
 	fmt.Println("  --limit <int>              Maximum events to list (default: 50)")
 	fmt.Println()
+	fmt.Println("Flags for 'inspect':")
+	fmt.Println("  --db <path>                Path to SQLite database (default: ./webhooks.db)")
+	fmt.Println("  --raw                      Print raw unformatted payload body")
+	fmt.Println()
 	fmt.Println("Flags for 'replay':")
 	fmt.Println("  --target <url>             Override destination target URL")
 	fmt.Println("  --provider <name>          Provider signing scheme (stripe, github, slack, shopify, standard, auto)")
 	fmt.Println("  --secret <string>          Webhook HMAC secret to re-sign payload with fresh timestamp")
 	fmt.Println("  --set <key.path=value>     Mutate JSON field (can be specified multiple times)")
 	fmt.Println("  --concurrency <int>        Number of concurrent requests fired simultaneously (default: 1)")
+	fmt.Println("  --delay <duration>         Delay between spaced requests (e.g. 100ms, 1s)")
+	fmt.Println("  --diff                     Display visual diff of mutated JSON payload before replaying")
+	fmt.Println("  --db <path>                Path to SQLite database (default: ./webhooks.db)")
+	fmt.Println()
+	fmt.Println("Flags for 'curl':")
+	fmt.Println("  --target <url>             Override destination target URL")
+	fmt.Println("  --provider <name>          Provider signing scheme (stripe, github, slack, shopify, standard, auto)")
+	fmt.Println("  --secret <string>          Webhook HMAC secret to re-sign payload with fresh timestamp")
+	fmt.Println("  --set <key.path=value>     Mutate JSON field (can be specified multiple times)")
 	fmt.Println("  --db <path>                Path to SQLite database (default: ./webhooks.db)")
 }
 
@@ -98,8 +115,12 @@ func main() {
 		runListen(args)
 	case "list":
 		runList(args)
+	case "inspect":
+		runInspect(args)
 	case "replay":
 		runReplay(args)
+	case "curl":
+		runCurl(args)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
 		printUsage()
@@ -123,7 +144,6 @@ func runListen(args []string) {
 
 	_ = fs.Parse(args)
 
-	// If config file is provided, load defaults from it
 	if configPath != "" {
 		cfg, err := config.Load(configPath)
 		if err == nil {
@@ -225,6 +245,97 @@ func runList(args []string) {
 	_ = w.Flush()
 }
 
+func runInspect(args []string) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(os.Stderr, "Error: <event_id> argument is required for inspect")
+		fmt.Fprintln(os.Stderr, "Usage: webhook-replay-proxy inspect <event_id> [flags]")
+		os.Exit(1)
+	}
+
+	eventID := args[0]
+	args = args[1:]
+
+	fs := flag.NewFlagSet("inspect", flag.ExitOnError)
+	var (
+		dbPath  string
+		rawBody bool
+	)
+	fs.StringVar(&dbPath, "db", "./webhooks.db", "SQLite database path")
+	fs.BoolVar(&rawBody, "raw", false, "Print raw unformatted payload body")
+	_ = fs.Parse(args)
+
+	st, err := store.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open SQLite database at %s: %v\n", dbPath, err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	event, err := st.GetEvent(eventID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Event ID:       %s\n", event.ID)
+	fmt.Printf("Recorded At:    %s\n", event.Timestamp.Format("2006-01-02 15:04:05 MST"))
+	fmt.Printf("Provider:       %s\n", event.Provider)
+	fmt.Printf("Request:        %s %s\n", event.Method, event.Path)
+	if event.Query != "" {
+		fmt.Printf("Query:          %s\n", event.Query)
+	}
+	fmt.Printf("Target URL:     %s\n", event.TargetURL)
+	fmt.Printf("Forward Status: %d (%dms)\n", event.ForwardStatus, event.LatencyMs)
+
+	fmt.Println("\n--- HTTP Headers ---")
+	for k, vv := range event.Headers {
+		for _, v := range vv {
+			fmt.Printf("%s: %s\n", k, v)
+		}
+	}
+
+	fmt.Println("\n--- Payload Body ---")
+	if rawBody {
+		fmt.Println(string(event.Body))
+	} else {
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, event.Body, "", "  "); err == nil {
+			fmt.Println(pretty.String())
+		} else {
+			fmt.Println(string(event.Body))
+		}
+	}
+
+	if event.ResponseBody != "" {
+		fmt.Println("\n--- Target Response Body ---")
+		fmt.Println(event.ResponseBody)
+	}
+
+	replays, _ := st.GetReplaysForEvent(eventID)
+	if len(replays) > 0 {
+		fmt.Printf("\n--- Replay History (%d) ---\n", len(replays))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "TIMESTAMP\tTARGET\tSTATUS\tLATENCY\tRESULT")
+		for _, r := range replays {
+			res := "OK"
+			if !r.Success {
+				res = "FAILED"
+				if r.Error != "" {
+					res += " (" + r.Error + ")"
+				}
+			}
+			fmt.Fprintf(w, "%s\t%s\t%d\t%dms\t%s\n",
+				r.Timestamp.Format("15:04:05"),
+				r.TargetURL,
+				r.Status,
+				r.LatencyMs,
+				res,
+			)
+		}
+		_ = w.Flush()
+	}
+}
+
 func runReplay(args []string) {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		fmt.Fprintln(os.Stderr, "Error: <event_id> argument is required for replay")
@@ -241,6 +352,8 @@ func runReplay(args []string) {
 		provider    string
 		secret      string
 		concurrency int
+		delay       time.Duration
+		showDiff    bool
 		dbPath      string
 		mutations   arrayFlags
 	)
@@ -249,6 +362,8 @@ func runReplay(args []string) {
 	fs.StringVar(&provider, "provider", "auto", "Provider signing scheme (stripe, github, slack, shopify, standard, auto)")
 	fs.StringVar(&secret, "secret", "", "Webhook HMAC secret to re-sign payload")
 	fs.IntVar(&concurrency, "concurrency", 1, "Number of concurrent replayed requests")
+	fs.DurationVar(&delay, "delay", 0, "Delay between paced sequential requests")
+	fs.BoolVar(&showDiff, "diff", false, "Display visual diff of mutated JSON payload before replaying")
 	fs.StringVar(&dbPath, "db", "./webhooks.db", "SQLite database path")
 	fs.Var(&mutations, "set", "Mutate JSON field (key.path=value)")
 
@@ -269,7 +384,10 @@ func runReplay(args []string) {
 	if secret != "" {
 		fmt.Printf("• Re-signing with provider: %s\n", provider)
 	}
-	fmt.Printf("• Concurrency: %d simultaneous request(s)\n\n", concurrency)
+	if delay > 0 {
+		fmt.Printf("• Paced delay: %v\n", delay)
+	}
+	fmt.Printf("• Concurrency: %d request(s)\n\n", concurrency)
 
 	start := time.Now()
 	results, err := engine.Execute(context.Background(), proxy.ReplayOptions{
@@ -279,6 +397,8 @@ func runReplay(args []string) {
 		Secret:      secret,
 		Mutations:   mutations,
 		Concurrency: concurrency,
+		Delay:       delay,
+		ShowDiff:    showDiff,
 	})
 	totalTime := time.Since(start).Milliseconds()
 
@@ -300,4 +420,54 @@ func runReplay(args []string) {
 	}
 
 	fmt.Printf("\nFinished: %d/%d successful in %dms total\n", successCount, concurrency, totalTime)
+}
+
+func runCurl(args []string) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(os.Stderr, "Error: <event_id> argument is required for curl generator")
+		fmt.Fprintln(os.Stderr, "Usage: webhook-replay-proxy curl <event_id> [flags]")
+		os.Exit(1)
+	}
+
+	eventID := args[0]
+	args = args[1:]
+
+	fs := flag.NewFlagSet("curl", flag.ExitOnError)
+	var (
+		targetURL string
+		provider  string
+		secret    string
+		dbPath    string
+		mutations arrayFlags
+	)
+
+	fs.StringVar(&targetURL, "target", "", "Target URL override")
+	fs.StringVar(&provider, "provider", "auto", "Provider signing scheme (stripe, github, slack, shopify, standard, auto)")
+	fs.StringVar(&secret, "secret", "", "Webhook HMAC secret to re-sign payload")
+	fs.StringVar(&dbPath, "db", "./webhooks.db", "SQLite database path")
+	fs.Var(&mutations, "set", "Mutate JSON field (key.path=value)")
+
+	_ = fs.Parse(args)
+
+	st, err := store.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open SQLite database at %s: %v\n", dbPath, err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	engine := proxy.NewReplayEngine(st)
+	cmdStr, err := engine.GenerateCurl(proxy.ReplayOptions{
+		EventID:   eventID,
+		TargetURL: targetURL,
+		Provider:  provider,
+		Secret:    secret,
+		Mutations: mutations,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to generate curl command: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println(cmdStr)
 }
