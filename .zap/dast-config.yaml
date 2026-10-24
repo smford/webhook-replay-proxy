@@ -6,4 +6,4 @@ storage:
   max_events: 500
 
 upstream:
-  default_target_url: "http://127.0.0.1:8080/healthz"
+  default_target_url: ""
