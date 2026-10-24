@@ -230,6 +230,21 @@ Flags for 'curl':
 
 ---
 
+## Documentation
+
+Full documentation, interactive guides, and recipes are available at [**https://stephenford.org/webhook-replay-proxy/**](https://stephenford.org/webhook-replay-proxy/):
+
+- [**Getting Started Guide**](https://stephenford.org/webhook-replay-proxy/#/getting-started) — 5-minute setup and quickstart.
+- [**Worked Examples**](https://stephenford.org/webhook-replay-proxy/#/worked-examples) — Real-world scenarios (Stripe payment failures, GitHub PR bots, Slack events, chaos engineering).
+- [**Provider Recipes**](https://stephenford.org/webhook-replay-proxy/#/provider-recipes) — Signature formats and verification middleware for Stripe, GitHub, Slack, Shopify, and Svix.
+- [**CI/CD Integration**](https://stephenford.org/webhook-replay-proxy/#/ci-integration) — Automated concurrency stress tests and regression suites for GitHub Actions and GitLab.
+- [**Troubleshooting & Gotchas**](https://stephenford.org/webhook-replay-proxy/#/troubleshooting-gotchas) — Solving raw body middleware issues in Express, Next.js, FastAPI, and Go.
+- [**Cheat Sheet & Decision Matrix**](https://stephenford.org/webhook-replay-proxy/#/cheat-sheet) — 1-page quick-reference card for common testing workflows.
+- [**Architecture Deep Dive**](https://stephenford.org/webhook-replay-proxy/#/architecture) — Zero-CGO SQLite flight recorder and crypto signing engine.
+- [**CLI Reference**](https://stephenford.org/webhook-replay-proxy/#/cli-reference) — Complete flag reference for all subcommands.
+
+---
+
 ## License
 
 Released under the [MIT License](LICENSE). Copyright &copy; 2026 Simon Ford.

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 300" width="820" height="300">
+  <defs>
+    <style>
+      .window { fill: #0d1117; stroke: #30363d; stroke-width: 1px; rx: 8px; }
+      .titlebar { fill: #161b22; }
+      .title-text { fill: #8b949e; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; font-weight: 500; text-anchor: middle; }
+      .code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+      .prompt { fill: #58a6ff; font-weight: 600; }
+      .cmd { fill: #f0f6fc; font-weight: 500; }
+      .dim { fill: #6e7681; }
+      .text { fill: #c9d1d9; }
+      .success { fill: #3fb950; font-weight: 600; }
+      .error { fill: #ff7b72; font-weight: 600; }
+      .warning { fill: #d29922; }
+      .highlight { fill: #79c0ff; }
+      .purple { fill: #d2a8ff; }
+    </style>
+  </defs>
+
+  <rect class="window" x="1" y="1" width="818" height="298" />
+  <path class="titlebar" d="M1,1 H819 Q819,1 819,8 V36 H1 V8 Q1,1 8,1 Z" />
+  <circle cx="20" cy="18" r="6" fill="#ff5f56" />
+  <circle cx="38" cy="18" r="6" fill="#ffbd2e" />
+  <circle cx="56" cy="18" r="6" fill="#27c93f" />
+  <text class="title-text" x="410.0" y="22">bash — chaos &amp; negative security testing</text>
+  <g class="code" transform="translate(24, 62)">
+    <text y="0"><tspan class="prompt">$ </tspan><tspan class="cmd">webhook-replay-proxy replay evt_1792882862 \</tspan></text>
+    <text y="22"><tspan class="cmd">    --secret whsec_dev_local_secret \</tspan></text>
+    <text y="44"><tspan class="cmd">    --corrupt-sig \</tspan></text>
+    <text y="66"><tspan class="cmd">    --assert-status 401</tspan></text>
+    <text y="92"><tspan class="text">Replaying event: evt_1792882862</tspan></text>
+    <text y="112"><tspan class="dim">• Re-signing with provider: stripe</tspan></text>
+    <text y="132"><tspan class="warning">• Chaos Mode: Corrupting HMAC signature</tspan></text>
+    <text y="152"><tspan class="dim">• Concurrency: 1 request(s)</tspan></text>
+    <text y="180"><tspan class="text">[1] </tspan><tspan class="error">HTTP 401 Unauthorized</tspan><tspan class="dim"> | Latency: 4ms</tspan></text>
+    <text y="206"><tspan class="success">✓ Assertion PASSED:</tspan> <tspan class="text">Endpoint correctly rejected tampered HMAC with HTTP 401</tspan></text>
+  </g>
+</svg>

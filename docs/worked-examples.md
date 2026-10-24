@@ -127,6 +127,8 @@ You can pipe this command or paste it straight into Postman, Insomnia, or CI run
 ### The Scenario
 You need to verify that your application's security middleware properly rejects unauthorized or tampered webhook deliveries with HTTP `401 Unauthorized` or `400 Bad Request`.
 
+![Chaos Testing](assets/chaos-testing.svg)
+
 1. **Verify HMAC Signature Tampering Rejection**:
    ```bash
    webhook-replay-proxy replay evt_179285514721 \
@@ -179,6 +181,8 @@ webhook-replay-proxy replay evt_179285514721 \
 ### The Scenario
 You want to include a webhook race condition test in your GitHub Actions CI pipeline, asserting that under 10 concurrent requests, exactly 1 succeeds (200) and 9 return an idempotency conflict (409), and all finish under 150ms:
 
+![CI Assertions](assets/ci-assertions.svg)
+
 ```bash
 webhook-replay-proxy replay evt_179285514721 \
   --concurrency 10 \
@@ -217,6 +221,8 @@ You want to commit recorded webhooks directly into your git repository alongside
 
 ### The Scenario
 You prefer an interactive visual interface to inspect live webhooks, modify payloads, and test replaying.
+
+![Live Dashboard UI](assets/dashboard-ui.svg)
 
 ```bash
 webhook-replay-proxy listen --port 8080 --forward-to http://localhost:3000/webhook --ui

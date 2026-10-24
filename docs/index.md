@@ -91,11 +91,26 @@ go install github.com/smford/webhook-replay-proxy/cmd/webhook-replay-proxy@lates
 
 | Command | Description |
 |---|---|
-| `webhook-replay-proxy listen --port 8080 --forward-to <url>` | Start the capture proxy daemon and forward to local app |
+| `webhook-replay-proxy listen --port 8080 --forward-to <url> --ui` | Start capture proxy daemon with embedded live Web UI dashboard |
 | `webhook-replay-proxy list [--db <path>]` | List all captured webhooks in tabular format |
 | `webhook-replay-proxy inspect <event_id>` | Inspect headers, pretty JSON payload, and replay history |
-| `webhook-replay-proxy replay <event_id> [flags]` | Replay webhook with fresh signatures, mutations, and concurrency |
-| `webhook-replay-proxy curl <event_id> [flags]` | Generate an executable `curl` command with fresh HMAC signature |
+| `webhook-replay-proxy export <event_id> -o <file>` | Export recorded webhook to a standalone JSON fixture |
+| `webhook-replay-proxy replay [<event_id> \| --file <path>]` | Replay webhook with fresh signatures, mutations, chaos testing, and assertions |
+| `webhook-replay-proxy curl [<event_id> \| --file <path>]` | Generate an executable `curl` command with fresh HMAC signature |
 | `webhook-replay-proxy version` | Print version, commit, date, and license info |
+
+---
+
+## Documentation Sections
+
+- [**Getting Started**](getting-started.md) — 5-minute quickstart guide from installation to first replay.
+- [**Worked Examples**](worked-examples.md) — Real-world scenarios for Stripe, GitHub, Slack, concurrency testing, and chaos validation.
+- [**Provider Recipes**](provider-recipes.md) — Provider-specific signature specifications, secret setup, and code snippets.
+- [**CI/CD Pipelines**](ci-integration.md) — Automating idempotency and race condition regression checks in GitHub Actions and GitLab.
+- [**Troubleshooting & Gotchas**](troubleshooting-gotchas.md) — Solving raw body middleware issues in Express, Next.js, FastAPI, and Go.
+- [**Cheat Sheet & Decision Matrix**](cheat-sheet.md) — 1-page quick-reference card for common testing workflows.
+- [**Architecture & Cryptography**](architecture.md) — Deep dive into the zero-CGO SQLite flight recorder and HMAC engines.
+- [**CLI Reference**](cli-reference.md) — Complete flag reference for all subcommands.
+
 
 Check out [Worked Examples](worked-examples.md) to see real-world workflows in action!
