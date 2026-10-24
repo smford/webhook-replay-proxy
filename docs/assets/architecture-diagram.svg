@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 360" width="860" height="360">
+  <defs>
+    <style>
+      .bg { fill: #0d1117; stroke: #30363d; stroke-width: 1px; rx: 8px; }
+      .box { fill: #161b22; stroke: #30363d; stroke-width: 1.5px; rx: 6px; }
+      .box-active { fill: #1f2937; stroke: #38bdf8; stroke-width: 1.5px; rx: 6px; }
+      .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; font-weight: 600; fill: #f0f6fc; text-anchor: middle; }
+      .sub { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 11px; fill: #8b949e; text-anchor: middle; }
+      .arrow { stroke: #58a6ff; stroke-width: 2px; fill: none; marker-end: url(#arrowhead); }
+      .arrow-dashed { stroke: #a371f7; stroke-width: 2px; stroke-dasharray: 4,4; fill: none; marker-end: url(#arrowhead-purple); }
+      .tag { font-family: ui-monospace, Menlo, monospace; font-size: 10px; fill: #79c0ff; text-anchor: middle; }
+    </style>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#58a6ff" />
+    </marker>
+    <marker id="arrowhead-purple" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#a371f7" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="1" y="1" width="858" height="358" />
+
+  <!-- Stage 1: Incoming Webhooks -->
+  <rect class="box" x="30" y="50" width="160" height="70" />
+  <text class="title" x="110" y="80">Incoming Webhooks</text>
+  <text class="sub" x="110" y="100">Stripe, GitHub, Slack, Svix</text>
+
+  <!-- Arrow 1 -->
+  <path class="arrow" d="M190 85 L240 85" />
+
+  <!-- Stage 2: Capture Proxy Listener -->
+  <rect class="box-active" x="240" y="40" width="180" height="90" />
+  <text class="title" x="330" y="75">Capture Daemon</text>
+  <text class="sub" x="330" y="95">HTTP Proxy on :8080</text>
+  <text class="sub" x="330" y="112">Auto-Detects Provider</text>
+
+  <!-- Arrow 2 to SQLite -->
+  <path class="arrow" d="M330 130 L330 190" />
+  <text class="tag" x="375" y="165">Async Save</text>
+
+  <!-- Stage 3: Pure-Go SQLite Flight Recorder -->
+  <rect class="box" x="240" y="190" width="180" height="80" />
+  <text class="title" x="330" y="225">SQLite Flight Recorder</text>
+  <text class="sub" x="330" y="245">Zero-CGO modernc.org/sqlite</text>
+  <text class="sub" x="330" y="260">webhooks.db</text>
+
+  <!-- Arrow from SQLite to Replay Engine -->
+  <path class="arrow-dashed" d="M420 230 L480 230" />
+  <text class="tag" x="450" y="220">Replay</text>
+
+  <!-- Stage 4: Replay Engine & Mutator -->
+  <rect class="box-active" x="480" y="180" width="170" height="100" />
+  <text class="title" x="565" y="210">Replay &amp; Mutator</text>
+  <text class="sub" x="565" y="230">Dot-Path Overrides (--set)</text>
+  <text class="sub" x="565" y="248">HMAC SHA-256 Re-signer</text>
+  <text class="sub" x="565" y="265">Fresh Unix Timestamp</text>
+
+  <!-- Arrow to Concurrency Barrier -->
+  <path class="arrow" d="M650 230 L700 230" />
+
+  <!-- Stage 5: Concurrency Barrier & Target -->
+  <rect class="box" x="700" y="170" width="130" height="120" />
+  <text class="title" x="765" y="200">Barrier Release</text>
+  <text class="sub" x="765" y="220">sync.WaitGroup</text>
+  <text class="sub" x="765" y="238">N simultaneous</text>
+  <text class="title" x="765" y="265" fill="#38bdf8">Target App</text>
+  <text class="sub" x="765" y="280">localhost:3000</text>
+
+  <!-- Forwarding during live capture -->
+  <path class="arrow" d="M420 85 L765 85 L765 170" />
+  <text class="tag" x="590" y="75">Live Forward (--forward-to)</text>
+</svg>
