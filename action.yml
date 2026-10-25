@@ -1,0 +1,320 @@
+name: 'Webhook Replay Proxy'
+description: 'Deterministic webhook replayer, payload mutator, HMAC re-signer, and idempotency tester for CI/CD'
+author: 'smford'
+branding:
+  icon: 'repeat'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'Version of webhook-replay-proxy to install (e.g., "latest", "v0.2.1", or "0.2.1")'
+    required: false
+    default: 'latest'
+  install-only:
+    description: 'Only install webhook-replay-proxy to PATH without executing a replay command'
+    required: false
+    default: 'false'
+  command:
+    description: 'Command to run (replay, curl, inspect, list, export, version)'
+    required: false
+    default: 'replay'
+  file:
+    description: 'Path to webhook fixture JSON file to replay'
+    required: false
+  event-id:
+    description: 'Recorded webhook event ID to replay'
+    required: false
+  target:
+    description: 'Destination target URL override'
+    required: false
+  provider:
+    description: 'Provider signing scheme (stripe, github, slack, shopify, standard, auto)'
+    required: false
+  secret:
+    description: 'Webhook HMAC secret used to re-sign payload with fresh timestamp'
+    required: false
+  set:
+    description: 'Field mutations in dot-path notation (key.path=value), one per line'
+    required: false
+  concurrency:
+    description: 'Number of concurrent requests fired simultaneously (default: 1)'
+    required: false
+  delay:
+    description: 'Delay between spaced requests (e.g., 100ms, 1s)'
+    required: false
+  diff:
+    description: 'Display visual diff of mutated JSON payload before replaying'
+    required: false
+    default: 'false'
+  corrupt-sig:
+    description: 'Deliberately corrupt HMAC signature to verify 401 rejection'
+    required: false
+    default: 'false'
+  corrupt-json:
+    description: 'Deliberately malform payload JSON to test parser error handling'
+    required: false
+    default: 'false'
+  drop-header:
+    description: 'Strip specified header before dispatching (one per line)'
+    required: false
+  time-offset:
+    description: 'Offset signing timestamp from current time (e.g., -10m, +1h)'
+    required: false
+  fixed-timestamp:
+    description: 'Use an exact fixed unix epoch timestamp for signing'
+    required: false
+  assert-status:
+    description: 'Assert response status distribution (e.g., "200:1,409:9" or "200")'
+    required: false
+  max-latency:
+    description: 'Fail assertion if any request latency exceeds threshold (e.g., 250ms)'
+    required: false
+  db:
+    description: 'Path to SQLite database'
+    required: false
+  args:
+    description: 'Additional raw CLI arguments to append'
+    required: false
+  github-token:
+    description: 'GitHub token for authenticated API requests (prevents rate limiting)'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  installed-version:
+    description: 'Installed version of webhook-replay-proxy'
+    value: ${{ steps.install.outputs.installed-version }}
+  binary-path:
+    description: 'Absolute path to the installed binary'
+    value: ${{ steps.install.outputs.binary-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install webhook-replay-proxy
+      id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        TARGET_OS=""
+        case "${RUNNER_OS:-$(uname -s)}" in
+          Linux) TARGET_OS="linux" ;;
+          Darwin|macOS) TARGET_OS="darwin" ;;
+          *)
+            echo "::error::Unsupported operating system: ${RUNNER_OS:-$(uname -s)}"
+            exit 1
+            ;;
+        esac
+
+        TARGET_ARCH=""
+        case "${RUNNER_ARCH:-$(uname -m)}" in
+          X64|x86_64|amd64) TARGET_ARCH="amd64" ;;
+          ARM64|aarch64|arm64) TARGET_ARCH="arm64" ;;
+          *)
+            echo "::error::Unsupported runner architecture: ${RUNNER_ARCH:-$(uname -m)}"
+            exit 1
+            ;;
+        esac
+
+        AUTH_HEADER=()
+        if [ -n "$GH_TOKEN" ]; then
+          AUTH_HEADER=(-H "Authorization: Bearer $GH_TOKEN")
+        fi
+
+        TAG=""
+        if [ -z "$INPUT_VERSION" ] || [ "$INPUT_VERSION" = "latest" ]; then
+          if [ -n "$GH_TOKEN" ]; then
+            TAG=$(curl -sSL "${AUTH_HEADER[@]}" https://api.github.com/repos/smford/webhook-replay-proxy/releases/latest | grep '"tag_name":' | head -1 | sed -E 's/.*"([^"]+)".*/\1/') || true
+          fi
+          if [ -z "$TAG" ]; then
+            TAG=$(basename "$(curl -sLI -o /dev/null -w '%{url_effective}' https://github.com/smford/webhook-replay-proxy/releases/latest)")
+          fi
+        elif [[ "$INPUT_VERSION" == v* ]]; then
+          TAG="$INPUT_VERSION"
+        else
+          TAG="v$INPUT_VERSION"
+        fi
+
+        CLEAN_VERSION="${TAG#v}"
+        echo "Installing webhook-replay-proxy version: $TAG ($CLEAN_VERSION) for ${TARGET_OS}/${TARGET_ARCH}"
+
+        BIN_DIR="${RUNNER_TEMP:-/tmp}/webhook-replay-proxy-bin"
+        mkdir -p "$BIN_DIR"
+        TARGET_BIN="$BIN_DIR/webhook-replay-proxy"
+
+        if [ ! -f "$TARGET_BIN" ] || [ ! -x "$TARGET_BIN" ]; then
+          ASSET="webhook-replay-proxy_${CLEAN_VERSION}_${TARGET_OS}_${TARGET_ARCH}.tar.gz"
+          URL="https://github.com/smford/webhook-replay-proxy/releases/download/${TAG}/${ASSET}"
+          TMP_TAR="${RUNNER_TEMP:-/tmp}/$ASSET"
+
+          DOWNLOAD_OK=false
+          echo "Downloading $URL..."
+          if curl -sSLf "${AUTH_HEADER[@]}" "$URL" -o "$TMP_TAR"; then
+            if tar -xzf "$TMP_TAR" -C "$BIN_DIR" webhook-replay-proxy 2>/dev/null; then
+              DOWNLOAD_OK=true
+            fi
+            rm -f "$TMP_TAR"
+          fi
+
+          if [ "$DOWNLOAD_OK" = "false" ]; then
+            echo "Release asset download was unsuccessful. Attempting fallback via go install..."
+            if command -v go >/dev/null 2>&1; then
+              go install "github.com/smford/webhook-replay-proxy/cmd/webhook-replay-proxy@${TAG}" || \
+              go install "github.com/smford/webhook-replay-proxy/cmd/webhook-replay-proxy@latest"
+              GOPATH_BIN="$(go env GOPATH)/bin"
+              cp "$GOPATH_BIN/webhook-replay-proxy" "$TARGET_BIN"
+            else
+              echo "::error::Could not download precompiled binary from $URL and Go is not available for compilation."
+              exit 1
+            fi
+          fi
+
+          chmod +x "$TARGET_BIN"
+        fi
+
+        echo "$BIN_DIR" >> "$GITHUB_PATH"
+        echo "binary-path=$TARGET_BIN" >> "$GITHUB_OUTPUT"
+        echo "installed-version=$CLEAN_VERSION" >> "$GITHUB_OUTPUT"
+        echo "Successfully installed webhook-replay-proxy to $TARGET_BIN"
+        "$TARGET_BIN" version
+
+    - name: Execute webhook-replay-proxy
+      id: execute
+      shell: bash
+      env:
+        INPUT_INSTALL_ONLY: ${{ inputs.install-only }}
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_FILE: ${{ inputs.file }}
+        INPUT_EVENT_ID: ${{ inputs.event-id }}
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_SECRET: ${{ inputs.secret }}
+        INPUT_CONCURRENCY: ${{ inputs.concurrency }}
+        INPUT_DELAY: ${{ inputs.delay }}
+        INPUT_DIFF: ${{ inputs.diff }}
+        INPUT_CORRUPT_SIG: ${{ inputs.corrupt-sig }}
+        INPUT_CORRUPT_JSON: ${{ inputs.corrupt-json }}
+        INPUT_TIME_OFFSET: ${{ inputs.time-offset }}
+        INPUT_FIXED_TIMESTAMP: ${{ inputs.fixed-timestamp }}
+        INPUT_ASSERT_STATUS: ${{ inputs.assert-status }}
+        INPUT_MAX_LATENCY: ${{ inputs.max-latency }}
+        INPUT_DB: ${{ inputs.db }}
+        INPUT_SET: ${{ inputs.set }}
+        INPUT_DROP_HEADER: ${{ inputs.drop-header }}
+        INPUT_ARGS: ${{ inputs.args }}
+        BINARY_PATH: ${{ steps.install.outputs.binary-path }}
+      run: |
+        set -euo pipefail
+
+        # If install-only was requested, skip execution
+        if [ "$INPUT_INSTALL_ONLY" = "true" ]; then
+          echo "install-only is true. Skipping command execution."
+          exit 0
+        fi
+
+        CMD="${INPUT_COMMAND:-replay}"
+
+        # If default replay was specified but no target/file/event-id/args were supplied,
+        # treat as setup/verification step.
+        if [ "$CMD" = "replay" ] && [ -z "$INPUT_FILE" ] && [ -z "$INPUT_EVENT_ID" ] && [ -z "$INPUT_TARGET" ] && [ -z "$INPUT_ARGS" ]; then
+          echo "No replay target or fixture specified. Action initialized as setup step."
+          exit 0
+        fi
+
+        ARGS=()
+
+        # Positional event ID if provided
+        if [ -n "$INPUT_EVENT_ID" ]; then
+          ARGS+=("$INPUT_EVENT_ID")
+        fi
+
+        if [ -n "$INPUT_FILE" ]; then
+          ARGS+=(--file "$INPUT_FILE")
+        fi
+
+        if [ -n "$INPUT_TARGET" ]; then
+          ARGS+=(--target "$INPUT_TARGET")
+        fi
+
+        if [ -n "$INPUT_PROVIDER" ]; then
+          ARGS+=(--provider "$INPUT_PROVIDER")
+        fi
+
+        if [ -n "$INPUT_SECRET" ]; then
+          ARGS+=(--secret "$INPUT_SECRET")
+        fi
+
+        if [ -n "$INPUT_CONCURRENCY" ]; then
+          ARGS+=(--concurrency "$INPUT_CONCURRENCY")
+        fi
+
+        if [ -n "$INPUT_DELAY" ]; then
+          ARGS+=(--delay "$INPUT_DELAY")
+        fi
+
+        if [ "$INPUT_DIFF" = "true" ]; then
+          ARGS+=(--diff)
+        fi
+
+        if [ "$INPUT_CORRUPT_SIG" = "true" ]; then
+          ARGS+=(--corrupt-sig)
+        fi
+
+        if [ "$INPUT_CORRUPT_JSON" = "true" ]; then
+          ARGS+=(--corrupt-json)
+        fi
+
+        if [ -n "$INPUT_TIME_OFFSET" ]; then
+          ARGS+=(--time-offset "$INPUT_TIME_OFFSET")
+        fi
+
+        if [ -n "$INPUT_FIXED_TIMESTAMP" ]; then
+          ARGS+=(--fixed-timestamp "$INPUT_FIXED_TIMESTAMP")
+        fi
+
+        if [ -n "$INPUT_ASSERT_STATUS" ]; then
+          ARGS+=(--assert-status "$INPUT_ASSERT_STATUS")
+        fi
+
+        if [ -n "$INPUT_MAX_LATENCY" ]; then
+          ARGS+=(--max-latency "$INPUT_MAX_LATENCY")
+        fi
+
+        if [ -n "$INPUT_DB" ]; then
+          ARGS+=(--db "$INPUT_DB")
+        fi
+
+        # Parse multiline or single-line --set mutations
+        if [ -n "$INPUT_SET" ]; then
+          while IFS= read -r line || [ -n "$line" ]; do
+            trimmed=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            if [ -n "$trimmed" ]; then
+              ARGS+=(--set "$trimmed")
+            fi
+          done <<< "$INPUT_SET"
+        fi
+
+        # Parse multiline or single-line --drop-header options
+        if [ -n "$INPUT_DROP_HEADER" ]; then
+          while IFS= read -r line || [ -n "$line" ]; do
+            trimmed=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            if [ -n "$trimmed" ]; then
+              ARGS+=(--drop-header "$trimmed")
+            fi
+          done <<< "$INPUT_DROP_HEADER"
+        fi
+
+        # Append additional arbitrary arguments if provided
+        if [ -n "$INPUT_ARGS" ]; then
+          # Split args while respecting word boundaries
+          eval "EXTRA_ARGS=($INPUT_ARGS)"
+          ARGS+=("${EXTRA_ARGS[@]}")
+        fi
+
+        BIN="${BINARY_PATH:-webhook-replay-proxy}"
+        echo "Running: $BIN $CMD ${ARGS[@]+"${ARGS[@]}"}"
+        "$BIN" "$CMD" ${ARGS[@]+"${ARGS[@]}"}

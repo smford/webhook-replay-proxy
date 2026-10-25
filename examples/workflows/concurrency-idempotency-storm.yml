@@ -1,0 +1,33 @@
+name: Webhook Idempotency Storm
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'internal/handlers/**'
+      - 'src/webhooks/**'
+
+jobs:
+  concurrency-storm:
+    name: High-Concurrency Burst Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Start Application Service
+        run: |
+          ./scripts/start-test-server.sh &
+          curl --retry 10 --retry-delay 1 --retry-connrefused http://localhost:8080/health
+
+      # Releases 25 requests simultaneously using a sync barrier.
+      # Asserts exactly 1 returns HTTP 200 (processed) and 24 return HTTP 409 (idempotency conflict).
+      - name: Concurrency Burst (25 Requests at the Same Millisecond)
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          file: examples/fixtures/svix_invoice_paid.json
+          target: http://localhost:8080/webhooks/svix
+          secret: ${{ secrets.SVIX_WEBHOOK_SECRET }}
+          concurrency: 25
+          assert-status: "200:1,409:24"
+          max-latency: 400ms

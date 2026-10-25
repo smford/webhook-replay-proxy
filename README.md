@@ -1,6 +1,7 @@
 # webhook-replay-proxy
 
 [![CI](https://github.com/smford/webhook-replay-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/smford/webhook-replay-proxy/actions/workflows/ci.yml)
+[![GitHub Action](https://img.shields.io/badge/GitHub_Action-smford%2Fwebhook--replay--proxy-blue?logo=githubactions&logoColor=white)](https://github.com/smford/webhook-replay-proxy)
 [![Release](https://img.shields.io/github/v/release/smford/webhook-replay-proxy?color=blue&logo=github)](https://github.com/smford/webhook-replay-proxy/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/smford/webhook-replay-proxy/badge)](https://securityscorecards.dev/viewer/?repo=github.com/smford/webhook-replay-proxy)
@@ -137,6 +138,39 @@ Open `http://localhost:8080/_dashboard` in your browser for a real-time event in
 ---
 
 ## Installation
+
+### GitHub Action (CI/CD)
+
+Use `webhook-replay-proxy` directly inside your GitHub Actions workflows without installing Go:
+
+```yaml
+# Replay webhook fixture with HMAC re-signing & idempotency storm
+- name: Replay Webhook with Cryptographic Verification
+  uses: smford/webhook-replay-proxy@v0.2.1
+  with:
+    file: examples/fixtures/stripe_checkout_completed.json
+    target: http://localhost:3000/api/webhooks/stripe
+    secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+    concurrency: 10
+    assert-status: "200:1,409:9"
+    max-latency: 250ms
+```
+
+Or use as a runner setup action to add `webhook-replay-proxy` to `$GITHUB_PATH`:
+
+```yaml
+- name: Setup Webhook Replay Proxy
+  uses: smford/webhook-replay-proxy@v0.2.1
+  with:
+    install-only: true
+
+- name: Run Custom Webhook Tests
+  run: |
+    webhook-replay-proxy version
+    webhook-replay-proxy replay --file fixtures/event.json --target http://localhost:3000/webhook
+```
+
+See [examples/](examples/) and [CI/CD Integration](https://stephenford.org/webhook-replay-proxy/#/ci-integration) for complete worked workflows and fixtures.
 
 ### Homebrew (macOS / Linux)
 

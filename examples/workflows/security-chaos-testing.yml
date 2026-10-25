@@ -1,0 +1,58 @@
+name: Webhook Security & Chaos Verification
+
+on:
+  schedule:
+    - cron: '0 4 * * 1' # Weekly Monday security audit
+  workflow_dispatch:
+
+jobs:
+  security-audit:
+    name: Webhook Defense Audits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Start Application Service
+        run: |
+          make run-backend &
+          sleep 3
+
+      # Verify tampered HMAC signature is rejected
+      - name: Verify Rejection of Corrupted Signature
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          file: examples/fixtures/github_pull_request.json
+          target: http://localhost:8080/api/webhooks/github
+          secret: ${{ secrets.GH_WEBHOOK_SECRET }}
+          corrupt-sig: true
+          assert-status: "401"
+
+      # Verify malformed JSON syntax is rejected gracefully
+      - name: Verify Rejection of Malformed JSON Syntax
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          file: examples/fixtures/github_pull_request.json
+          target: http://localhost:8080/api/webhooks/github
+          secret: ${{ secrets.GH_WEBHOOK_SECRET }}
+          corrupt-json: true
+          assert-status: "400"
+
+      # Verify stale webhooks outside 5-minute freshness window are rejected
+      - name: Verify Anti-Replay Clock Drift Protection (-15m)
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          file: examples/fixtures/stripe_checkout_completed.json
+          target: http://localhost:8080/api/webhooks/stripe
+          secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          time-offset: -15m
+          assert-status: "401"
+
+      # Verify missing signature header is rejected
+      - name: Verify Rejection When Signature Header is Stripped
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          file: examples/fixtures/stripe_checkout_completed.json
+          target: http://localhost:8080/api/webhooks/stripe
+          drop-header: Stripe-Signature
+          assert-status: "401"

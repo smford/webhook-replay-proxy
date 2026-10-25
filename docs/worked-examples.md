@@ -238,3 +238,52 @@ You get:
 - Formatted JSON payload viewer & header inspector
 - Point-and-click field mutation & one-click re-send
 - Instant "Copy curl" button
+
+---
+
+## Example 10: Automated CI/CD Regression Testing with GitHub Actions
+
+### The Scenario
+You want to run webhook idempotency, payload mutation, and security tests on every push or pull request in GitHub Actions without installing the Go toolchain.
+
+### Step-by-Step
+
+Use the official `smford/webhook-replay-proxy` GitHub Action:
+
+```yaml
+name: Webhook Regression Suite
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. Start your local server
+      - run: npm start &
+
+      # 2. Replay with concurrency burst & idempotency assertion
+      - name: Concurrency Idempotency Burst
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          file: examples/fixtures/stripe_checkout_completed.json
+          target: http://localhost:3000/api/webhooks/stripe
+          secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          concurrency: 10
+          assert-status: "200:1,409:9"
+          max-latency: 250ms
+
+      # 3. Chaos testing: ensure tampered signatures are rejected
+      - name: Verify Tampered Signature Rejection
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          file: examples/fixtures/stripe_checkout_completed.json
+          target: http://localhost:3000/api/webhooks/stripe
+          secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          corrupt-sig: true
+          assert-status: 401
+```
+
+For more configurations and custom scripting options, see [CI/CD Integration](ci-integration.md).

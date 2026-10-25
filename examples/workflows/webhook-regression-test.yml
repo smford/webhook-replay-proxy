@@ -1,0 +1,66 @@
+name: Webhook Regression Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  webhook-test:
+    name: Webhook Regression Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 1. Start your backend application in background
+      - name: Start Application Service
+        run: |
+          npm ci && npm start &
+          # Wait for application health check endpoint to be ready
+          npx wait-on http://localhost:3000/healthz --timeout 30000
+
+      # 2. Replay Stripe Checkout Event with Concurrency Burst
+      - name: "Test 1: Idempotency Barrier (10 Concurrent Requests)"
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          file: examples/fixtures/stripe_checkout_completed.json
+          target: http://localhost:3000/api/webhooks/stripe
+          secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          concurrency: 10
+          assert-status: "200:1,409:9"
+          max-latency: 250ms
+
+      # 3. Test Signature Tampering Rejection
+      - name: "Test 2: Security Verification (Tampered HMAC Signature)"
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          file: examples/fixtures/stripe_checkout_completed.json
+          target: http://localhost:3000/api/webhooks/stripe
+          secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          corrupt-sig: true
+          assert-status: "401"
+
+      # 4. Test Anti-Replay Clock Drift Protection (Expired Timestamp)
+      - name: "Test 3: Anti-Replay Verification (Expired Timestamp)"
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          file: examples/fixtures/stripe_checkout_completed.json
+          target: http://localhost:3000/api/webhooks/stripe
+          secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          time-offset: -10m
+          assert-status: "401"
+
+      # 5. Test Payload Mutation (Payment Failure Scenario)
+      - name: "Test 4: Payload Mutation (Unpaid Session Handling)"
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          file: examples/fixtures/stripe_checkout_completed.json
+          target: http://localhost:3000/api/webhooks/stripe
+          secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          set: |
+            data.object.payment_status=unpaid
+            data.object.amount_total=999999
+          diff: true
+          assert-status: "200"

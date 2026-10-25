@@ -1,0 +1,39 @@
+name: Setup CLI & Custom Scripting
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  custom-tests:
+    name: Custom Webhook Test Script
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Install webhook-replay-proxy into PATH
+      - name: Setup Webhook Replay Proxy
+        id: setup-proxy
+        uses: smford/webhook-replay-proxy@v0.2.1
+        with:
+          install-only: true
+
+      - name: Verify CLI Installation
+        run: |
+          echo "Installed version: ${{ steps.setup-proxy.outputs.installed-version }}"
+          echo "Binary path: ${{ steps.setup-proxy.outputs.binary-path }}"
+          webhook-replay-proxy version
+
+      # Run custom bash loops or Makefile targets
+      - name: Run Test Suite Across Multiple Fixtures
+        run: |
+          for fixture in examples/fixtures/*.json; do
+            echo "Running replay test for $fixture..."
+            webhook-replay-proxy replay \
+              --file "$fixture" \
+              --target "http://localhost:3000/webhooks" \
+              --secret "dev_webhook_secret" \
+              --concurrency 5 \
+              --assert-status 200
+          done

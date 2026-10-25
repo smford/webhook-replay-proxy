@@ -64,6 +64,18 @@ When network retries happen in production, webhooks arrive simultaneously. Does 
 
 ::: tabs
 
+@tab GitHub Action (CI/CD)
+```yaml
+- name: Test Webhook Idempotency & Signatures
+  uses: smford/webhook-replay-proxy@v0.2.1
+  with:
+    file: examples/fixtures/stripe_checkout_completed.json
+    target: http://localhost:3000/api/webhooks/stripe
+    secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+    concurrency: 10
+    assert-status: "200:1,409:9"
+```
+
 @tab Homebrew (macOS / Linux)
 ```bash
 brew install smford/homebrew-tap/webhook-replay-proxy

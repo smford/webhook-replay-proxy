@@ -1,0 +1,37 @@
+{
+  "id": "evt_slack_msg_938172",
+  "timestamp": "2026-10-25T00:00:00Z",
+  "provider": "slack",
+  "method": "POST",
+  "path": "/api/webhooks/slack",
+  "target_url": "http://localhost:3000/api/webhooks/slack",
+  "headers": {
+    "Content-Type": [
+      "application/json"
+    ],
+    "User-Agent": [
+      "Slackbot 1.0 (+https://api.slack.com/robots)"
+    ],
+    "X-Slack-Request-Timestamp": [
+      "1792855147"
+    ],
+    "X-Slack-Signature": [
+      "v0=a2114d57b48eac39b9ad189dd8316235a7b4a8d21aefb76a73bc854a0ac11f9"
+    ]
+  },
+  "payload": {
+    "token": "slack_verification_token_sample",
+    "team_id": "T0001",
+    "api_app_id": "A012345678",
+    "event": {
+      "type": "app_mention",
+      "user": "U12345678",
+      "text": "<@U0LAN0Z89> deploy to staging",
+      "ts": "1792855147.000200",
+      "channel": "C12345678"
+    },
+    "type": "event_callback",
+    "event_id": "Ev08M283",
+    "event_time": 1792855147
+  }
+}

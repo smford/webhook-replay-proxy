@@ -121,3 +121,62 @@ jobs:
           distribution: goreleaser
           version: '~> v2'
           args: check
+
+  action-test:
+    name: GitHub Action Integration Test
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Test Action Setup Mode
+        id: setup-test
+        uses: ./
+        with:
+          install-only: true
+
+      - name: Verify Action Installation Outputs
+        run: |
+          test -n "${{ steps.setup-test.outputs.installed-version }}"
+          test -x "${{ steps.setup-test.outputs.binary-path }}"
+          webhook-replay-proxy version
+
+      - name: Start Mock Webhook Receiver
+        run: |
+          python3 -c "
+          import http.server, socketserver
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_POST(self):
+                  sig = self.headers.get('Stripe-Signature', '')
+                  if 'corrupt' in sig:
+                      self.send_response(401)
+                  else:
+                      self.send_response(200)
+                  self.end_headers()
+                  self.wfile.write(b'{\"status\":\"ok\"}')
+              def log_message(self, *args):
+                  pass
+          with socketserver.TCPServer(('127.0.0.1', 8999), H) as httpd:
+              httpd.serve_forever()
+          " &
+          sleep 1
+
+      - name: Test Action Replay with Mutation & Assertion
+        uses: ./
+        with:
+          file: examples/fixtures/stripe_checkout_completed.json
+          target: http://127.0.0.1:8999/api/webhooks/stripe
+          secret: whsec_test_secret
+          set: data.object.amount_total=99999
+          diff: true
+          assert-status: "200"
+
+      - name: Test Action Chaos Mode (Corrupted Signature Rejection)
+        uses: ./
+        with:
+          file: examples/fixtures/stripe_checkout_completed.json
+          target: http://127.0.0.1:8999/api/webhooks/stripe
+          secret: whsec_test_secret
+          corrupt-sig: true
+          assert-status: "401"

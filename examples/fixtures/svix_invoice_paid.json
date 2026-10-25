@@ -1,0 +1,36 @@
+{
+  "id": "msg_svix_2q8h9v1m4k",
+  "timestamp": "2026-10-25T00:00:00Z",
+  "provider": "standard",
+  "method": "POST",
+  "path": "/api/webhooks/svix",
+  "target_url": "http://localhost:3000/api/webhooks/svix",
+  "headers": {
+    "Content-Type": [
+      "application/json"
+    ],
+    "User-Agent": [
+      "Svix-Webhooks/1.4"
+    ],
+    "webhook-id": [
+      "msg_svix_2q8h9v1m4k"
+    ],
+    "webhook-timestamp": [
+      "1792855147"
+    ],
+    "webhook-signature": [
+      "v1,g0hM9SsE+OTPJTGtUVW6LMqi9C8+ufdubdCSUrht6k8="
+    ]
+  },
+  "payload": {
+    "event": "invoice.paid",
+    "invoice_id": "in_10928374",
+    "amount_due": 0,
+    "amount_paid": 12500,
+    "currency": "usd",
+    "customer": {
+      "id": "cus_4810294",
+      "email": "finance@example.com"
+    }
+  }
+}
